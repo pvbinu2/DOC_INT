@@ -8,5 +8,5 @@ app.use(express.json());
 app.use(routes);
 
 app.listen(port, () => {
-  console.log(`Microservice running at http://localhost:${port}`);
+  console.log(`Microservice running`);
 });
