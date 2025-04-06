@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import Tesseract from 'tesseract.js';
+import { createWorker } from 'tesseract.js';
 import { execSync } from 'child_process';
 import os from 'os';
 import { v4 as uuidv4 } from 'uuid';
@@ -15,6 +15,7 @@ const Ocr = class OcrController {
         res.json({ status: "ok" })
     }
 
+
     async genrateOcr(req, res) {
         if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
         const __filename = fileURLToPath(import.meta.url);
@@ -25,29 +26,53 @@ const Ocr = class OcrController {
 
         try {
 
-          
+
 
             await fs.mkdir(tempDir);
             await fs.writeFile(pdfPath, req.file.buffer);
 
-            const cmd = `pdftoppm -png "${pdfPath}" "${path.join(tempDir, 'page')}"`;
+            const cmd = `pdftoppm -png -r 300 "${pdfPath}" "${path.join(tempDir, 'page')}"`;
             execSync(cmd);
 
             const files = await fs.readdir(tempDir);
             const imageFiles = files.filter((f) => f.endsWith('.png')).sort();
             const results = [];
 
+            const worker = await createWorker("eng", 1);
+            await worker.setParameters({
+                ttessedit_create_tsv: "1"
+            })
+
             for (let i = 0; i < imageFiles.length; i++) {
                 const imgPath = path.join(tempDir, imageFiles[i]);
                 const imgBuffer = await fs.readFile(imgPath);
 
-                const {
-                    data: { text },
-                } = await Tesseract.recognize(imgBuffer, 'eng');
+                const result = await worker.recognize(imgBuffer, {}, { tsv: "1" })
+                const data = result.data;
+                const text = data.text;
+                const confidence = data.confidence;
 
-                results.push({ pageNumber: i + 1, text });
+                const lines = data.tsv.trim().split('\n');
+
+                const words = lines
+                    .slice(1)
+                    .map(l => l.split('\t'))
+                    .filter(cols => cols[0] === '5' && cols[11]?.trim())
+                    .map(cols => ({
+                        text: cols[11],
+                        bbox: {
+                            x0: parseInt(cols[6]),
+                            y0: parseInt(cols[7]),
+                            x1: parseInt(cols[6]) + parseInt(cols[8]),
+                            y1: parseInt(cols[7]) + parseInt(cols[9]),
+                        },
+                        confidence: parseFloat(cols[10]),
+                    }));
+
+                results.push({ pageNumber: i + 1, text, confidence, words: words });
             }
 
+            await worker.terminate();
             res.json(results);
 
         } catch (err) {
